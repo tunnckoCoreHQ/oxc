@@ -264,7 +264,7 @@ impl SourceFormatter {
         // Languages that embed JS/TS code.
         // Expressions like `__vue_expression` and `__ng_directive` are not supported yet.
         // WASI: `prettier-plugin-oxfmt` calls back into the NAPI binding, which the host cannot provide,
-        // so Prettier formats the embedded JS/TS itself.
+        // so Prettier formats the embedded JS/TS itself. See DIVERGENCES.md.
         #[cfg(feature = "napi")]
         if matches!(language, Vue | Svelte | Astro) {
             inject_oxfmt_plugin_payload(&mut prettier_options, config, path);
