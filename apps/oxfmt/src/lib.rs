@@ -2,7 +2,7 @@
 mod api;
 pub mod cli;
 mod core;
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 mod prettier_compat;
 
 pub use core::oxfmtrc;

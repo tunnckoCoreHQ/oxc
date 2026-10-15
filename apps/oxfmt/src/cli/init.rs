@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "wasi"))]
 use std::sync::OnceLock;
 
 /// Initialize Rayon global thread pool with specified number of threads.
@@ -9,6 +10,7 @@ use std::sync::OnceLock;
 ///
 /// # Panics
 /// Panics if another consumer has already initialized the global thread pool.
+#[cfg(not(target_os = "wasi"))]
 #[expect(clippy::print_stderr)]
 pub fn init_rayon(threads: Option<usize>) {
     static RAYON_INIT: OnceLock<()> = OnceLock::new();
@@ -44,4 +46,14 @@ pub fn init_rayon(threads: Option<usize>) {
 
         rayon::ThreadPoolBuilder::new().num_threads(thread_count).build_global().unwrap();
     });
+}
+
+/// Initialize Rayon global thread pool on the current thread, as `wasm32-wasip1` has no threads.
+/// `threads` is ignored.
+///
+/// # Panics
+/// Panics if the global thread pool is already initialized.
+#[cfg(target_os = "wasi")]
+pub fn init_rayon(_threads: Option<usize>) {
+    rayon::ThreadPoolBuilder::new().num_threads(1).use_current_thread().build_global().unwrap();
 }

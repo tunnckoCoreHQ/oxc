@@ -38,8 +38,6 @@ oxc_formatter_json = { workspace = true }
 oxc_formatter_markdown = { workspace = true }
 oxc_formatter_toml = { workspace = true }
 oxc_formatter_yaml = { workspace = true }
-oxc_language_server = { workspace = true }
-oxc_napi = { workspace = true }
 oxc_span = { workspace = true }
 
 bpaf = { workspace = true, features = ["autocomplete", "bright-color", "derive"] }
@@ -56,14 +54,20 @@ serde = { workspace = true }
 serde_json = { workspace = true, features = ["unbounded_depth"] }
 simdutf8 = { workspace = true }
 sort-package-json = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = [] } # Omit the `regex` feature
-tower-lsp-server = { workspace = true, features = ["url-fluent-uri"] }
 
 # NAPI dependencies (conditional on napi feature)
 napi = { workspace = true, features = ["async", "serde-json"], optional = true }
 napi-derive = { workspace = true, optional = true }
+
+# Not available on `wasm32-wasip1` (no threads, no async runtime): the LSP and NAPI-only code is
+# compiled out there, see `#[cfg(target_os = "wasi")]` in `src/`.
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+oxc_language_server = { workspace = true }
+oxc_napi = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tower-lsp-server = { workspace = true, features = ["url-fluent-uri"] }
 
 [build-dependencies]
 napi-build = { workspace = true }

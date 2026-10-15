@@ -391,14 +391,28 @@ fn walk_and_stream(
 
     // Git-related settings come from the shared helper to align with Oxlint.
     // NOTE: Prettier only reads `.gitignore` in the cwd and does not respect `.git/info/exclude`.
-    configure_walk_builder(&mut inner, has_vcs_boundary)
+    let inner = configure_walk_builder(&mut inner, has_vcs_boundary)
         // Do not follow symlinks like Prettier does.
         // See https://github.com/prettier/prettier/pull/14627
         .follow_links(false)
         // Use the same thread count as rayon (controlled by `--threads`)
-        .threads(rayon::current_num_threads())
-        .build_parallel()
-        .visit(&mut builder);
+        .threads(rayon::current_num_threads());
+
+    #[cfg(not(target_os = "wasi"))]
+    inner.build_parallel().visit(&mut builder);
+
+    // `wasm32-wasip1` has no threads, so drive the same visitor over the sequential walker.
+    // `visit()` returns `Skip` only for walk errors, which have nothing to descend into.
+    #[cfg(target_os = "wasi")]
+    {
+        use ignore::ParallelVisitorBuilder as _;
+        let mut visitor = builder.build();
+        for entry in inner.build() {
+            if matches!(visitor.visit(entry), ignore::WalkState::Quit) {
+                break;
+            }
+        }
+    }
 }
 
 struct WalkVisitorBuilder {

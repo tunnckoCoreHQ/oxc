@@ -57,7 +57,7 @@ pub struct ResolvedDispatchConfig {
     markdown: OnceLock<MarkdownFormatOptions>,
     toml: OnceLock<TomlFormatOptions>,
     /// The options handed to Prettier; see [`PrettierOptions`].
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     prettier: PrettierOptions,
 }
 
@@ -70,7 +70,7 @@ pub struct ResolvedDispatchConfig {
 /// (a pre-built Value loses overrides, #18246), and `path` is the one per-file ingredient,
 /// keeping it out of the config is what keeps the config shareable across files.
 /// Lazy so an embed-free file never builds the JSON at all.
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 #[derive(Default)]
 struct PrettierOptions {
     path: std::path::PathBuf,
@@ -90,7 +90,7 @@ impl ResolvedDispatchConfig {
             json: [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()],
             markdown: OnceLock::new(),
             toml: OnceLock::new(),
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             prettier: PrettierOptions::default(),
         }
     }
@@ -106,9 +106,9 @@ impl ResolvedDispatchConfig {
         path: &std::path::Path,
     ) -> Arc<Self> {
         let dispatch_config = Self::new(config, validated);
-        #[cfg(feature = "napi")]
+        #[cfg(any(feature = "napi", target_os = "wasi"))]
         let dispatch_config = dispatch_config.with_path(path.to_path_buf());
-        #[cfg(not(feature = "napi"))]
+        #[cfg(not(any(feature = "napi", target_os = "wasi")))]
         let _ = path;
         Arc::new(dispatch_config)
     }
@@ -186,7 +186,7 @@ impl ResolvedDispatchConfig {
 }
 
 /// Napi-only methods: the [`PrettierOptions`] accessors and the Tailwind predicate.
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 impl ResolvedDispatchConfig {
     /// Sets the host file path for `filepath` injection into [`Self::prettier_options`];
     /// chained by [`Self::for_root`].

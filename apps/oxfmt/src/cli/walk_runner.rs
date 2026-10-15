@@ -16,16 +16,16 @@ use super::{
     service::{FormatService, SuccessResult},
     walk::ScopedWalker,
 };
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use crate::core::JsConfigLoaderCb;
 use crate::core::{ConfigScopes, FormatPlan, SourceFormatter, resolve_ignore_paths, utils};
 
 pub struct WalkRunner {
     options: FormatCommand,
     cwd: PathBuf,
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     external_services: Option<crate::core::ExternalServices>,
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     js_config_loader: Option<JsConfigLoaderCb>,
 }
 
@@ -38,14 +38,14 @@ impl WalkRunner {
         Self {
             options,
             cwd: env::current_dir().expect("Failed to get current working directory"),
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             external_services: None,
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             js_config_loader: None,
         }
     }
 
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     #[must_use]
     pub fn with_external_services(
         mut self,
@@ -55,7 +55,7 @@ impl WalkRunner {
         self
     }
 
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     #[must_use]
     pub fn with_js_config_loader(mut self, js_config_loader: JsConfigLoaderCb) -> Self {
         self.js_config_loader = Some(js_config_loader);
@@ -87,7 +87,7 @@ impl WalkRunner {
             &cwd,
             config_options.config.as_deref(),
             config_options.use_nested_configs(),
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             self.js_config_loader.as_ref(),
         ) {
             Ok(scopes) => scopes,
@@ -136,7 +136,7 @@ impl WalkRunner {
 
         // Create `SourceFormatter` instance
         let source_formatter = SourceFormatter::new(num_of_threads);
-        #[cfg(feature = "napi")]
+        #[cfg(any(feature = "napi", target_os = "wasi"))]
         let source_formatter = source_formatter.with_external_services(self.external_services);
 
         let cwd_for_format = cwd.clone();
@@ -145,10 +145,12 @@ impl WalkRunner {
 
         // Spawn formatting service on a dedicated thread so it doesn't occupy the rayon pool.
         // It just blocks on `rx_entry` waiting for entries; `par_bridge()` inside still uses rayon.
-        std::thread::spawn(move || {
+        let run_format_service = move || {
             let format_service = FormatService::new(cwd_for_format, format_mode, source_formatter);
             format_service.run_streaming(rx_entry, &tx_error_for_format, &tx_success);
-        });
+        };
+        #[cfg(not(target_os = "wasi"))]
+        std::thread::spawn(run_format_service);
 
         // Run scoped walks (root + nested) sends entries to `tx_entry` and errors to `tx_error`.
         // Manually drop after the walk to signal the formatting service that no more entries will be sent.
@@ -188,6 +190,11 @@ impl WalkRunner {
                 return CliRunResult::InvalidOptionConfig;
             }
         };
+
+        // WASI has no threads: the walk has queued every entry in the (unbounded) channel,
+        // format them on this thread now.
+        #[cfg(target_os = "wasi")]
+        run_format_service();
 
         // Collect results and separate changed paths from unchanged count
         let mut changed_paths: Vec<(String, Option<Duration>)> = vec![];

@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 
 export default defineConfig({
   // Build all entry points together to share Prettier chunks
-  entry: ["src-js/index.ts", "src-js/cli.ts", "src-js/cli-worker.ts"],
+  entry: ["src-js/index.ts", "src-js/cli.ts", "src-js/cli-worker.ts", "src-js/wasi.ts"],
   format: "esm",
   platform: "node",
   target: "node20",

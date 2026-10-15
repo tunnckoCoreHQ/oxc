@@ -9,6 +9,8 @@ mod walk;
 mod walk_runner;
 
 pub use crate::core::utils::init_tracing;
+#[cfg(target_os = "wasi")]
+pub use crate::core::{ExternalServices, create_js_config_loader};
 #[cfg(feature = "napi")]
 pub use command::MigrateSource;
 pub use command::{FormatCommand, Mode, format_command};
