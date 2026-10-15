@@ -9,14 +9,14 @@
 use std::sync::Arc;
 
 use oxc_formatter_core::SessionServices;
-#[cfg(not(feature = "napi"))]
+#[cfg(not(any(feature = "napi", target_os = "wasi")))]
 use oxc_formatter_core::StringEmbedder;
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use oxc_formatter_core::TailwindSorter;
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use tracing::debug_span;
 
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use crate::core::ExternalServices;
 
 use super::dispatcher::ResolvedDispatchConfig;
@@ -26,7 +26,7 @@ use super::dispatcher::ResolvedDispatchConfig;
 /// A non-native fence dispatches to the registry's `PreserveOriginal`,
 /// which the adapter answers as `Err` (the string channel's "keep verbatim");
 /// no Prettier exists in this build, and no Tailwind sorter either.
-#[cfg(not(feature = "napi"))]
+#[cfg(not(any(feature = "napi", target_os = "wasi")))]
 pub fn for_root(dispatch_config: &Arc<ResolvedDispatchConfig>) -> SessionServices {
     // A fence dispatcher and this root's dispatcher are the same fallback-less registry,
     // so the root's doubles as the fence adapter's.
@@ -79,7 +79,7 @@ pub fn for_root(dispatch_config: &Arc<ResolvedDispatchConfig>) -> SessionService
 ///
 /// All four paths use the SAME `sort_tailwindcss_classes` napi callback; only the wiring differs.
 /// Moving sorting to the wrong layer (e.g. sorting inside embedded CSS instead of at the root) would double-sort or drop classes.
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 pub fn for_root(
     external_services: &ExternalServices,
     dispatch_config: &Arc<ResolvedDispatchConfig>,

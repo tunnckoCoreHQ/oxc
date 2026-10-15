@@ -1,4 +1,4 @@
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use oxc_formatter::SortTailwindcssOptions;
 use oxc_formatter::{
     ArrowParentheses, AttributePosition, BracketSameLine, BracketSpacing, CommentLineStrategy,
@@ -8,7 +8,7 @@ use oxc_formatter::{
 };
 use oxc_formatter_core::{CoreFormatOptions, FormatOptions};
 
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use super::super::oxfmtrc::SortTailwindcssUserConfig;
 use super::super::oxfmtrc::{
     ArrowParensConfig, CommentLineStrategyConfig, FormatConfig, HtmlWhitespaceSensitivityConfig,
@@ -120,10 +120,10 @@ pub fn to_oxc_formatter(
 
     format_options.sort_imports = sort_imports;
     format_options.jsdoc = to_jsdoc(config);
-    // napi only, like the CSS mapper: collection itself normalizes whitespace,
+    // napi / WASI only, like the CSS mapper: collection itself normalizes whitespace,
     // so enabling it without the JS-side sorter would apply half the feature
     // (normalized but unsorted classes).
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     if let Some(tw_config) =
         config.sort_tailwindcss.clone().and_then(SortTailwindcssUserConfig::into_config)
     {

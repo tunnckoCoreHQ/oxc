@@ -9,11 +9,13 @@ use oxc_formatter_json::{JsonFormatOptions, JsonVariant};
 use oxc_formatter_yaml::YamlFormatOptions;
 
 #[cfg(feature = "napi")]
+use super::options::inject_oxfmt_plugin_payload;
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use super::options::{
-    inject_filepath, inject_opt_in_plugin_payloads, inject_oxfmt_plugin_payload, inject_parser,
-    inject_tailwind_plugin_payload, to_prettier,
+    inject_filepath, inject_opt_in_plugin_payloads, inject_parser, inject_tailwind_plugin_payload,
+    to_prettier,
 };
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use super::support::PrettierLanguage;
 use super::{
     embed::dispatcher::ResolvedDispatchConfig,
@@ -47,7 +49,7 @@ pub enum FormatResult {
 
 pub struct SourceFormatter {
     allocator_pool: AllocatorPool,
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     external_services: Option<super::ExternalServices>,
 }
 
@@ -55,7 +57,7 @@ impl SourceFormatter {
     pub fn new(num_of_threads: usize) -> Self {
         Self {
             allocator_pool: AllocatorPool::new(num_of_threads),
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             external_services: None,
         }
     }
@@ -152,7 +154,7 @@ impl SourceFormatter {
             FormatStrategy::Native(NativeLanguage::Toml) => {
                 oxc_formatter_toml::format(source_text, to_oxc_formatter_toml(&config, core))
             }
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             FormatStrategy::Prettier(language) => {
                 self.format_by_prettier(source_text, &path, language, &config)
             }
@@ -173,15 +175,15 @@ impl SourceFormatter {
 
     /// A `PhysicalFile` root session carrying the build's default services
     /// (`embed::services::for_root`).
-    #[cfg_attr(not(feature = "napi"), expect(clippy::unused_self))]
+    #[cfg_attr(not(any(feature = "napi", target_os = "wasi")), expect(clippy::unused_self))]
     fn root_session<'a>(
         &self,
         allocator: &'a Allocator,
         dispatch_config: &Arc<ResolvedDispatchConfig>,
     ) -> FormatSession<'a> {
-        #[cfg(feature = "napi")]
+        #[cfg(any(feature = "napi", target_os = "wasi"))]
         let services = super::embed::services::for_root(self.external_services(), dispatch_config);
-        #[cfg(not(feature = "napi"))]
+        #[cfg(not(any(feature = "napi", target_os = "wasi")))]
         let services = super::embed::services::for_root(dispatch_config);
         FormatSession::with_services(allocator, InputKind::PhysicalFile, services)
     }
@@ -220,8 +222,8 @@ fn print<C: FormatContext>(
 
 // ---
 
-/// NAPI-only methods for `SourceFormatter`, handling Prettier delegation.
-#[cfg(feature = "napi")]
+/// NAPI / WASI only methods for `SourceFormatter`, handling Prettier delegation.
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 impl SourceFormatter {
     #[must_use]
     pub fn with_external_services(
@@ -232,7 +234,7 @@ impl SourceFormatter {
         self
     }
 
-    /// The napi transport, installed by [`Self::with_external_services`] before any format run.
+    /// The napi (or WASI host) transport, installed by [`Self::with_external_services`] before any format run.
     fn external_services(&self) -> &super::ExternalServices {
         self.external_services
             .as_ref()
@@ -261,6 +263,9 @@ impl SourceFormatter {
         }
         // Languages that embed JS/TS code.
         // Expressions like `__vue_expression` and `__ng_directive` are not supported yet.
+        // WASI: `prettier-plugin-oxfmt` calls back into the NAPI binding, which the host cannot provide,
+        // so Prettier formats the embedded JS/TS itself. See DIVERGENCES.md.
+        #[cfg(feature = "napi")]
         if matches!(language, Vue | Svelte | Astro) {
             inject_oxfmt_plugin_payload(&mut prettier_options, config, path);
         }

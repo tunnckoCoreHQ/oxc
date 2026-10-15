@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_linter::Oxlintrc;
 
+#[cfg(feature = "napi")]
 use crate::run::JsLoadJsConfigsCb;
 
 /// Callback type for loading JavaScript/TypeScript config files.
@@ -52,6 +53,7 @@ struct JsConfigResultJson {
 ///
 /// The returned function blocks the current thread until the JS callback resolves.
 /// It will panic if called outside of a Tokio runtime.
+#[cfg(feature = "napi")]
 pub fn create_js_config_loader(cb: JsLoadJsConfigsCb) -> JsConfigLoaderCb {
     Box::new(move |paths: Vec<String>| {
         let cb = &cb;
@@ -107,7 +109,7 @@ fn parse_js_oxlintrc(mut value: serde_json::Value) -> Result<Oxlintrc, OxcDiagno
 }
 
 /// Parse the JSON response from JS side into `JsConfigResult` structs.
-fn parse_js_config_response(json: &str) -> Result<Vec<JsConfigResult>, Vec<OxcDiagnostic>> {
+pub fn parse_js_config_response(json: &str) -> Result<Vec<JsConfigResult>, Vec<OxcDiagnostic>> {
     let response: LoadJsConfigsResponse = serde_json::from_str(json).map_err(|e| {
         vec![OxcDiagnostic::error(format!("Failed to parse JS config response: {e}"))]
     })?;

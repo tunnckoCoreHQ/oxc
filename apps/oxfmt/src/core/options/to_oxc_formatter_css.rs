@@ -33,7 +33,7 @@ pub fn to_oxc_formatter_css(
     // [Oxfmt] sortTailwindcss: collect `@apply` classes for batch sorting.
     // The sorter itself is JS-side, so this stays off in the pure Rust build
     // (classes would print as-is anyway, but skipping collection is cheaper).
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     {
         options.sort_tailwindcss = config.is_tailwind_enabled();
     }

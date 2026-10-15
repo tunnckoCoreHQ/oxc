@@ -2,5 +2,6 @@
 /dist/
 /dist-pkg-plugins/
 /dist-pkg-plugin-eslint/
+/dist-wasi/
 /src-js/generated/plugin-eslint/
 *.node

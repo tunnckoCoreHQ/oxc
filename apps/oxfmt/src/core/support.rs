@@ -7,7 +7,7 @@ use oxc_formatter_json::JsonVariant;
 use oxc_span::SourceType;
 
 use super::language::{Language, Route};
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use super::oxfmtrc::FormatConfig;
 
 /// Classify a file path into a [`FormatStrategy`].
@@ -57,7 +57,7 @@ pub fn classify_file(path: &Path) -> Option<FormatStrategy> {
         return Some(FormatStrategy::Native(NativeLanguage::Markdown));
     }
 
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     if let Some(language) = prettier_language(file_name, ext) {
         return Some(FormatStrategy::Prettier(language));
     }
@@ -77,7 +77,7 @@ pub fn classify_as(language: Language, path: &Path) -> Option<FormatStrategy> {
     }
     match language.route() {
         Route::Native(language) => Some(FormatStrategy::Native(language)),
-        #[cfg(feature = "napi")]
+        #[cfg(any(feature = "napi", target_os = "wasi"))]
         Route::Prettier(language) => Some(FormatStrategy::Prettier(language)),
         _ => None,
     }
@@ -99,7 +99,7 @@ pub enum FormatStrategy {
     /// formatted as JSON first, then as YAML if that fails.
     YamlRc,
     /// Files formatted by delegating to Prettier (Tier 3/4).
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     Prettier(PrettierLanguage),
 }
 
@@ -110,7 +110,7 @@ impl FormatStrategy {
             Self::Native(language) => language.trace_label(),
             Self::PackageJson => "package_json",
             Self::YamlRc => "yaml_rc",
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             Self::Prettier(language) => language.parser(),
         }
     }
@@ -163,7 +163,7 @@ pub enum PrettierLanguage {
     /// Formatted only when `prettier-plugin-astro` is enabled (`astro` config key).
     Astro,
     /// Whole files only: [`route_embedded`](super::language::route_embedded) never returns it.
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     Mjml,
     /// Handlebars files (`.hbs` / `.handlebars`), following Prettier's convention of formatting them with its `glimmer` parser.
     /// They are parsed as classic Ember (Glimmer) templates,
@@ -172,7 +172,7 @@ pub enum PrettierLanguage {
     Glimmer,
 }
 
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 impl PrettierLanguage {
     /// The Prettier `parser` name injected into the options JSON.
     pub fn parser(self) -> &'static str {
@@ -391,7 +391,7 @@ static MARKDOWN_EXTENSIONS: phf::Set<&'static str> = phf_set! {
 
 /// Returns the [`PrettierLanguage`] for the file, if supported.
 /// See also `prettier --support-info | jq '.languages[]'`
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 fn prettier_language(file_name: &str, ext: &str) -> Option<PrettierLanguage> {
     if file_name.ends_with(".component.html") {
         return Some(PrettierLanguage::Angular);

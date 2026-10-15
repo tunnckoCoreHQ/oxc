@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+#[cfg(feature = "napi")]
 use napi::{Status, bindgen_prelude::Promise, threadsafe_function::ThreadsafeFunction};
 use serde_json::Value;
 
 /// JS callback to load a single JavaScript/TypeScript config file.
 /// Takes an absolute path string and returns the config object directly.
+#[cfg(feature = "napi")]
 pub type JsLoadJsConfigCb = ThreadsafeFunction<
     // Arguments: absolute path to config file
     String,
@@ -20,7 +22,7 @@ pub type JsLoadJsConfigCb = ThreadsafeFunction<
 
 /// Callback type for loading a JavaScript/TypeScript config file.
 ///
-/// Wraps the NAPI `ThreadsafeFunction` and blocks the current thread until the JS callback resolves.
+/// Wraps the NAPI `ThreadsafeFunction` (or the WASI host import) and blocks the current thread until the JS callback resolves.
 /// Uses `Arc` so it can be shared across CLI, Stdin, and LSP code paths.
 pub type JsConfigLoaderCb = Arc<dyn Fn(String) -> Result<Value, String> + Send + Sync>;
 
@@ -39,6 +41,7 @@ pub type JsConfigLoaderCb = Arc<dyn Fn(String) -> Result<Value, String> + Send +
 /// - inside a Tokio runtime, wrap with `block_in_place` so the Tokio worker
 ///   can be reused for other tasks while we block on the NAPI promise
 /// - outside a Tokio runtime, drive the future directly via the captured handle
+#[cfg(feature = "napi")]
 pub fn create_js_config_loader(cb: JsLoadJsConfigCb) -> JsConfigLoaderCb {
     let handle = tokio::runtime::Handle::current();
     Arc::new(move |path: String| {

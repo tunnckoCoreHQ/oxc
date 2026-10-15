@@ -13,7 +13,7 @@ use super::super::oxfmtrc::{
     QuotePropsConfig, SortTailwindcssUserConfig, SvelteConfig, SvelteUserConfig,
     TrailingCommaConfig,
 };
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use super::super::support::PrettierLanguage;
 
 /// Build base Prettier-compatible options from a typed `FormatConfig`.
@@ -235,7 +235,7 @@ pub fn build_prettier_options(config: &FormatConfig, path: &Path) -> Value {
 ///
 /// The single table for both whole files (`format_by_prettier`)
 /// and embedded parts through the Doc→IR fallback (`ResolvedDispatchConfig::prettier_options_for`).
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 pub fn inject_opt_in_plugin_payloads(
     opts: &mut Value,
     language: PrettierLanguage,

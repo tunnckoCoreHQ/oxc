@@ -275,3 +275,21 @@ Prettier keeps `json` / `json5` blocks as written: their parser rejects a blank 
 `prettier-plugin-astro` formats it with bundled `sass-formatter`, which we do not bundle (patched out).
 Rare in Astro projects (GitHub code search, 2026-10: about 350 files in 72 repos, vs 29k for `lang="scss"`).
 Not tested but `oxc-css-parser` already parses it, so we can add Sass support for `oxc_formatter_css` in the future.
+
+## wasm32-wasip1 CLI: JS/TS in Vue, Svelte and Astro files
+
+Unlike the entries above, this one compares the `wasm32-wasip1` CLI with the native oxfmt CLI, not oxfmt with Prettier.
+It applies only to the wasm build.
+
+In `.vue`, `.svelte` and `.astro` files, native oxfmt formats embedded JS/TS with `oxc_formatter` through `prettier-plugin-oxfmt`.
+That plugin calls back into the NAPI binding, which a wasm host cannot provide, so the wasm build does not inject it and Prettier's own JS/TS printer formats that code.
+This affects `<script>` blocks, Astro frontmatter, and the Vue template fragments native oxfmt formats: `v-for` bindings, `v-slot` bindings and `<script generic="…">`.
+Other template expressions are not formatted by native oxfmt either.
+
+There, the wasm output can differ from native output:
+
+- oxfmt-only options are not applied: `sortImports`, `jsdoc`, and `sortTailwindcss` on class strings in script code (e.g. `clsx(...)`). Tailwind sorting in template attributes still works.
+- `oxc_formatter`'s divergences from Prettier do not apply, e.g. [ts-in-vue-generic-trailing-comma](#ts-in-vue-generic-trailing-comma) keeps Prettier's `<T = any,>`.
+- CSS, GraphQL and HTML in template literals inside `<script>` are formatted by Prettier, not by oxfmt's formatters.
+
+With default options, and code that hits no `oxc_formatter` divergence, the output is the same as native.

@@ -1,9 +1,14 @@
 import {
+  COMMENT_SIZE,
+  COMMENTS_LEN_OFFSET,
+  COMMENTS_OFFSET,
   DATA_POINTER_POS_32,
   SOURCE_START_OFFSET,
   SOURCE_LEN_OFFSET,
   IS_JSX_FLAG_POS,
   IS_TS_FLAG_POS,
+  TOKENS_LEN_POS_32,
+  TOKENS_OFFSET_POS_32,
 } from "../generated/constants.ts";
 
 // We use the deserializer which removes `ParenthesizedExpression`s from AST,
@@ -19,7 +24,7 @@ import * as locationMethods from "./location.ts";
 import { initLines, lines, lineStartIndices, resetLinesAndLocs } from "./location.ts";
 import { resetScopeManager, SCOPE_MANAGER } from "./scope.ts";
 import * as scopeMethods from "./scope.ts";
-import { resetTokens } from "./tokens.ts";
+import { resetTokens, TOKEN_SIZE } from "./tokens.ts";
 import * as tokenMethods from "./tokens_methods.ts";
 import { getTokensAndComments, resetTokensAndComments } from "./tokens_and_comments.ts";
 import { debugAssertIsNonNull } from "../utils/asserts.ts";
@@ -35,6 +40,24 @@ const { utf8Slice } = Buffer.prototype;
 
 // Buffer containing AST. Set before linting a file by `setupSourceForFile`.
 export let buffer: BufferWithArrays | null = null;
+
+/**
+ * File source without a raw transfer buffer (`wasm32-wasip1` host).
+ *
+ * `tokens` and `comments` hold Rust's `Token`s and `Comment`s in their raw transfer layout.
+ */
+export interface FileSource {
+  sourceText: string;
+  isTs: boolean;
+  isJsx: boolean;
+  tokens: Uint8Array;
+  comments: Uint8Array;
+  /** Get AST of `sourceText`, with the same shape as the raw transfer deserializer gives. */
+  parse: () => Program;
+}
+
+// File source when there is no buffer. Set before linting a file by `setupSourceFromFileSource`.
+let fileSource: FileSource | null = null;
 
 // Indicates if the original source text has a BOM. Set before linting a file by `setupSourceForFile`.
 let hasBOM = false;
@@ -57,9 +80,24 @@ export function setupSourceForFile(bufferInput: BufferWithArrays, hasBOMInput: b
 }
 
 /**
+ * Set up source for the file about to be linted, when there is no raw transfer buffer.
+ * @param fileSourceInput - File source
+ * @param hasBOMInput - `true` if file's original source text has Unicode BOM
+ */
+export function setupSourceFromFileSource(fileSourceInput: FileSource, hasBOMInput: boolean): void {
+  fileSource = fileSourceInput;
+  hasBOM = hasBOMInput;
+}
+
+/**
  * Decode source text from buffer.
  */
 export function initSourceText(): void {
+  if (fileSource !== null) {
+    sourceText = fileSource.sourceText;
+    return;
+  }
+
   debugAssertIsNonNull(buffer);
   const { int32 } = buffer,
     programPos = int32[DATA_POINTER_POS_32];
@@ -81,14 +119,46 @@ export function initSourceText(): void {
 export function initAst(): void {
   if (sourceText === null) initSourceText();
   debugAssertIsNonNull(sourceText);
-  debugAssertIsNonNull(buffer);
 
-  ast = deserializeProgramOnly(buffer, sourceText, sourceStartPos, sourceByteLen);
+  if (fileSource !== null) {
+    ast = fileSource.parse();
+  } else {
+    debugAssertIsNonNull(buffer);
+    ast = deserializeProgramOnly(buffer, sourceText, sourceStartPos, sourceByteLen);
+  }
 
   // In conformance tests, fix AST when parsing as ES3
   if (CONFORMANCE) fixES3Ast();
 
   debugAssertIsNonNull(ast);
+}
+
+/**
+ * Get the file's tokens, in Rust's `Token` layout.
+ * @returns Tokens region of the buffer
+ */
+export function getTokensBytes(): Uint8Array {
+  if (fileSource !== null) return fileSource.tokens;
+
+  debugAssertIsNonNull(buffer);
+  const { int32 } = buffer;
+  const tokensPos = int32[TOKENS_OFFSET_POS_32];
+  return buffer.subarray(tokensPos, tokensPos + int32[TOKENS_LEN_POS_32] * TOKEN_SIZE);
+}
+
+/**
+ * Get the file's comments, in Rust's `Comment` layout.
+ * @returns Comments region of the buffer
+ */
+export function getCommentsBytes(): Uint8Array {
+  if (fileSource !== null) return fileSource.comments;
+
+  debugAssertIsNonNull(buffer);
+  const { int32 } = buffer;
+  const programPos32 = int32[DATA_POINTER_POS_32] >> 2;
+  const commentsPos = int32[programPos32 + (COMMENTS_OFFSET >> 2)];
+  const commentsLen = int32[programPos32 + (COMMENTS_LEN_OFFSET >> 2)];
+  return buffer.subarray(commentsPos, commentsPos + commentsLen * COMMENT_SIZE);
 }
 
 /**
@@ -140,6 +210,7 @@ function fixES3Node(node: any): void {
  */
 export function resetSourceAndAst(): void {
   buffer = null;
+  fileSource = null;
   sourceText = null;
   ast = null;
   resetBuffer();
@@ -155,6 +226,7 @@ export function resetSourceAndAst(): void {
  * @returns `true` if file is JSX, `false` if not
  */
 export function fileIsJsx(): boolean {
+  if (fileSource !== null) return fileSource.isJsx;
   debugAssertIsNonNull(buffer);
   // Flag is `bool` in Rust, so 0 = false, 1 = true
   return buffer[IS_JSX_FLAG_POS] === 1;
@@ -165,6 +237,7 @@ export function fileIsJsx(): boolean {
  * @returns `true` if file is TypeScript, `false` if not
  */
 export function fileIsTs(): boolean {
+  if (fileSource !== null) return fileSource.isTs;
   debugAssertIsNonNull(buffer);
   // Flag is `bool` in Rust, so 0 = false, 1 = true
   return buffer[IS_TS_FLAG_POS] === 1;

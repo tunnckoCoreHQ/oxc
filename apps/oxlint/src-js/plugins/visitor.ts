@@ -696,8 +696,38 @@ function createMerger(fnCount: number, isCfg: boolean): Merger | CfgMerger {
 
   body += fnBody;
 
-  // oxlint-disable-next-line typescript-eslint/no-implied-eval
-  return new Function("p", body) as Merger | CfgMerger;
+  try {
+    // oxlint-disable-next-line typescript-eslint/no-implied-eval
+    return new Function("p", body) as Merger | CfgMerger;
+  } catch {
+    // Runtime does not allow generating code (e.g. Cloudflare Workers, when handling a request).
+    // Fall back to a merger which calls the functions in a loop.
+    return isCfg ? mergeCfgVisitFnsInLoop : mergeVisitFnsInLoop;
+  }
+}
+
+/**
+ * Merge visit functions into a function which calls each of them in turn, in a loop.
+ * @param visitProps - Array of `VisitProp` objects
+ * @returns Function which calls all visit functions in turn
+ */
+function mergeVisitFnsInLoop(visitProps: VisitProp[]): VisitFn {
+  const fns = visitProps.map((visitProp) => visitProp.fn!);
+  return (node: Node) => {
+    for (let i = 0; i < fns.length; i++) fns[i](node);
+  };
+}
+
+/**
+ * Merge CFG visit functions into a function which calls each of them in turn, in a loop.
+ * @param visitProps - Array of `CfgVisitProp` objects
+ * @returns Function which calls all CFG visit functions in turn
+ */
+function mergeCfgVisitFnsInLoop(visitProps: CfgVisitProp[]): CfgVisitFn {
+  const fns = visitProps.map((visitProp) => visitProp.fn!);
+  return (...args: unknown[]) => {
+    for (let i = 0; i < fns.length; i++) fns[i](...args);
+  };
 }
 
 // Pre-defined mergers for merging up to 5 functions.

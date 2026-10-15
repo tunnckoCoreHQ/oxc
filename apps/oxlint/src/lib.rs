@@ -6,25 +6,30 @@ mod command;
 mod config_loader;
 mod init;
 mod lint;
+#[cfg(not(target_os = "wasi"))]
 pub mod lsp;
 mod mode;
 mod output_formatter;
 mod result;
 mod utils;
 mod walk;
+#[cfg(target_os = "wasi")]
+mod wasi_host;
 
 #[cfg(test)]
 mod tester;
 
 /// Re-exported CLI-related items for use in `tasks/website`.
 pub mod cli {
+    #[cfg(target_os = "wasi")]
+    pub use super::wasi_host::{create_external_linter, create_js_config_loader};
     pub use super::{command::*, init::*, lint::CliRunner, result::CliRunResult};
 }
 
 // Only include code to run linter when the `napi` feature is enabled.
 // Without this, `tasks/website` will not compile on Linux or Windows.
 // `tasks/website` depends on `oxlint` as a normal library, which causes linker errors if NAPI is enabled.
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 mod js_config;
 #[cfg(feature = "napi")]
 mod run;

@@ -1,13 +1,15 @@
 mod associations;
 mod editorconfig;
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 mod js_config;
 mod nested;
 mod overrides;
 mod scopes;
 
+#[cfg(any(feature = "napi", target_os = "wasi"))]
+pub use js_config::JsConfigLoaderCb;
 #[cfg(feature = "napi")]
-pub use js_config::{JsConfigLoaderCb, JsLoadJsConfigCb, create_js_config_loader};
+pub use js_config::{JsLoadJsConfigCb, create_js_config_loader};
 pub use nested::NestedConfigCtx;
 pub use scopes::ConfigScopes;
 
@@ -47,7 +49,7 @@ fn relative_path<'a>(base_dir: Option<&Path>, path: &'a Path) -> Cow<'a, str> {
 }
 
 pub fn config_discovery() -> ConfigDiscovery {
-    if cfg!(feature = "napi") && vp_version().is_some() {
+    if cfg!(any(feature = "napi", target_os = "wasi")) && vp_version().is_some() {
         ConfigDiscovery::vite_plus()
     } else {
         ConfigDiscovery::oxfmt()
@@ -64,19 +66,19 @@ struct ConfigLoader {
     /// Parsed `.editorconfig`, shared by every resolver this loads,
     /// instead of re-reading and re-parsing the same file.
     editorconfig: Option<Arc<EditorConfig>>,
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     js_loader: Option<JsConfigLoaderCb>,
 }
 
 impl ConfigLoader {
     fn new(
         editorconfig: Option<EditorConfig>,
-        #[cfg(feature = "napi")] js_loader: Option<JsConfigLoaderCb>,
+        #[cfg(any(feature = "napi", target_os = "wasi"))] js_loader: Option<JsConfigLoaderCb>,
     ) -> Self {
         Self {
             discovery: config_discovery(),
             editorconfig: editorconfig.map(Arc::new),
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             js_loader,
         }
     }
@@ -167,9 +169,9 @@ impl ConfigLoader {
     }
 }
 
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 impl ConfigLoader {
-    /// Load a JS/TS config file via NAPI and return the raw JSON value.
+    /// Load a JS/TS config file via the JS side (NAPI, or the WASI host) and return the raw JSON value.
     ///
     /// Returns `Ok(None)` when the JS side returns `null` (Vite+ `.fmt` missing).
     fn load_js_config(&self, path: &Path) -> Result<Option<Value>, String> {
@@ -188,7 +190,7 @@ impl ConfigLoader {
     }
 }
 
-#[cfg(not(feature = "napi"))]
+#[cfg(not(any(feature = "napi", target_os = "wasi")))]
 impl ConfigLoader {
     /// JS/TS config files need the Node.js CLI.
     #[expect(clippy::unused_self)]
@@ -224,7 +226,7 @@ fn into_outcome(
     path: &Path,
     strategy: FormatStrategy,
 ) -> ResolveOutcome {
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     if let FormatStrategy::Prettier(language) = &strategy
         && let Some(plugin) = language.missing_plugin(&config)
     {

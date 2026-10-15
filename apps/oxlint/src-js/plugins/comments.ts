@@ -2,14 +2,11 @@
  * Comment class, object pooling, and deserialization.
  */
 
-import { buffer, initSourceText, sourceText } from "./source_code.ts";
+import { getCommentsBytes, initSourceText, sourceText } from "./source_code.ts";
 import {
-  COMMENTS_OFFSET,
-  COMMENTS_LEN_OFFSET,
   COMMENT_SIZE,
   COMMENT_KIND_OFFSET,
   COMMENT_LINE_KIND,
-  DATA_POINTER_POS_32,
   COMMENT_DESERIALIZED_FLAG_OFFSET,
 } from "../generated/constants.ts";
 import { computeLoc } from "./location.ts";
@@ -227,8 +224,6 @@ export function initCommentsBuffer(): void {
     "Comments buffer already initialized",
   );
 
-  debugAssertIsNonNull(buffer);
-
   // We don't need to deserialize source text if there are no comments, so we could move this call to after
   // the `commentsLen === 0` check. However, various comments methods rely on that if `initComments` has been called,
   // then `sourceText` is initialized. Doing it eagerly here avoids having to check if `sourceText` is `null`
@@ -236,10 +231,8 @@ export function initCommentsBuffer(): void {
   if (sourceText === null) initSourceText();
   debugAssertIsNonNull(sourceText);
 
-  const { int32 } = buffer;
-  const programPos32 = int32[DATA_POINTER_POS_32] >> 2;
-  const commentsPos = int32[programPos32 + (COMMENTS_OFFSET >> 2)];
-  commentsLen = int32[programPos32 + (COMMENTS_LEN_OFFSET >> 2)];
+  const commentsBytes = getCommentsBytes();
+  commentsLen = commentsBytes.length / COMMENT_SIZE;
 
   // Fast path for files with no comments
   if (commentsLen === 0) {
@@ -252,10 +245,12 @@ export function initCommentsBuffer(): void {
 
   // Create typed array views over the comments region of the buffer.
   // These are zero-copy views over the same underlying `ArrayBuffer`.
-  const arrayBuffer = buffer.buffer,
-    absolutePos = buffer.byteOffset + commentsPos;
-  commentsUint8 = new Uint8Array(arrayBuffer, absolutePos, commentsLen * COMMENT_SIZE);
-  commentsInt32 = new Int32Array(arrayBuffer, absolutePos, commentsLen * COMMENT_SIZE32);
+  commentsUint8 = commentsBytes;
+  commentsInt32 = new Int32Array(
+    commentsBytes.buffer,
+    commentsBytes.byteOffset,
+    commentsLen * COMMENT_SIZE32,
+  );
 
   // Grow caches if needed. After first few files, caches should have grown large enough to service all files.
   // Later files will skip this step, and allocations stop.

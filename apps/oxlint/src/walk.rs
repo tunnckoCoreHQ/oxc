@@ -21,7 +21,11 @@ impl Default for Extensions {
 }
 
 pub struct Walk {
+    #[cfg(not(target_os = "wasi"))]
     inner: ignore::WalkParallel,
+    /// `wasm32-wasip1` has no threads, so use the sequential walker there.
+    #[cfg(target_os = "wasi")]
+    inner: ignore::Walk,
     /// The file extensions to include during the traversal.
     extensions: Extensions,
 }
@@ -58,11 +62,7 @@ impl ignore::ParallelVisitor for WalkCollector {
     fn visit(&mut self, entry: Result<ignore::DirEntry, ignore::Error>) -> ignore::WalkState {
         match entry {
             Ok(entry) => {
-                // Skip VCS metadata directories because they are not special cases for `.hidden(false)`.
-                // <https://github.com/BurntSushi/ripgrep/issues/3099#issuecomment-3052460027>
-                if entry.file_type().is_some_and(|ty| ty.is_dir())
-                    && (entry.file_name() == ".git" || entry.file_name() == ".jj")
-                {
+                if Walk::is_vcs_dir(&entry) {
                     return ignore::WalkState::Skip;
                 }
                 if Walk::is_wanted_entry(&entry, &self.extensions) {
@@ -110,11 +110,26 @@ impl Walk {
         let inner = configure_walk_builder(&mut inner, has_vcs_boundary)
             .follow_links(true)
             // Use the same thread count as rayon (controlled by `--threads`)
-            .threads(rayon::current_num_threads())
-            .build_parallel();
+            .threads(rayon::current_num_threads());
+        #[cfg(not(target_os = "wasi"))]
+        let inner = inner.build_parallel();
+        // Skip VCS metadata directories, as `WalkCollector::visit` does.
+        #[cfg(target_os = "wasi")]
+        let inner = inner.filter_entry(|entry| !Self::is_vcs_dir(entry)).build();
         Self { inner, extensions: Extensions::default() }
     }
 
+    #[cfg(target_os = "wasi")]
+    pub fn paths(self) -> Vec<Arc<OsStr>> {
+        let extensions = self.extensions;
+        self.inner
+            .filter_map(Result::ok)
+            .filter(|entry| Self::is_wanted_entry(entry, &extensions))
+            .map(|entry| entry.path().as_os_str().into())
+            .collect()
+    }
+
+    #[cfg(not(target_os = "wasi"))]
     pub fn paths(self) -> Vec<Arc<OsStr>> {
         let (sender, receiver) = mpsc::channel::<Vec<Arc<OsStr>>>();
         let mut builder = WalkBuilder { sender, extensions: self.extensions };
@@ -127,6 +142,13 @@ impl Walk {
     pub fn with_extensions(mut self, extensions: Extensions) -> Self {
         self.extensions = extensions;
         self
+    }
+
+    /// VCS metadata directories, which are not special cases for `.hidden(false)`.
+    /// <https://github.com/BurntSushi/ripgrep/issues/3099#issuecomment-3052460027>
+    fn is_vcs_dir(dir_entry: &DirEntry) -> bool {
+        dir_entry.file_type().is_some_and(|ty| ty.is_dir())
+            && (dir_entry.file_name() == ".git" || dir_entry.file_name() == ".jj")
     }
 
     fn is_wanted_entry(dir_entry: &DirEntry, extensions: &Extensions) -> bool {

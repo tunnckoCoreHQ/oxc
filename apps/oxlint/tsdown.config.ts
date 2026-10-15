@@ -118,6 +118,28 @@ export default defineConfig([
     },
   },
 
+  // Host side of the `wasm32-wasip1` CLI, for any JS runtime, including Cloudflare Workers.
+  // One file, with dependencies' browser builds, which do not need Node.js.
+  {
+    ...commonConfig,
+    entry: { wasi: "src-js/wasi.ts" },
+    platform: "browser",
+    outDir: "dist-wasi",
+    format: "esm",
+    deps: {
+      ...commonConfig.deps,
+      neverBundle: [/^node:/],
+    },
+    minify: minifyConfig,
+    dts: true,
+    define: definedGlobals,
+    plugins,
+    inputOptions: {
+      // For `replaceAssertsPlugin` and `replaceGlobalsPlugin`
+      experimental: { nativeMagicString: true },
+    },
+  },
+
   // `@oxlint/plugins` package.
   // Dual package - both ESM and CommonJS.
   {

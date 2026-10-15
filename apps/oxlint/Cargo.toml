@@ -33,9 +33,7 @@ oxc_ast_visit = { workspace = true, features = ["serialize"] }
 oxc_config = { workspace = true }
 oxc_diagnostics = { workspace = true }
 oxc_estree_tokens = { workspace = true }
-oxc_language_server = { workspace = true }
 oxc_linter = { workspace = true }
-oxc_napi = { workspace = true }
 oxc_parser = { workspace = true }
 oxc_semantic = { workspace = true }
 oxc_span = { workspace = true }
@@ -53,8 +51,14 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = { workspace = true, features = [] } # Omit the `regex` feature
+
+# Not available on `wasm32-wasip1` (no threads, no async runtime): the LSP and NAPI-only code is
+# compiled out there, see `#[cfg(target_os = "wasi")]` in `src/`.
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+oxc_language_server = { workspace = true }
+oxc_napi = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tower-lsp-server = { workspace = true, features = ["url-fluent-uri"] }
 
 [target.'cfg(not(any(target_os = "linux", target_os = "freebsd", target_arch = "arm", target_arch = "riscv64", target_family = "wasm")))'.dependencies]

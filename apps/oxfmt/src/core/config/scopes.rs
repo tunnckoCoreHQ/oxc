@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc};
 
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use super::js_config::JsConfigLoaderCb;
 use super::{
     ConfigLoader, ConfigResolver, NestedConfigCtx,
@@ -33,7 +33,9 @@ impl ConfigScopes {
         cwd: &Path,
         explicit_config: Option<&Path>,
         use_nested: bool,
-        #[cfg(feature = "napi")] js_config_loader: Option<&JsConfigLoaderCb>,
+        #[cfg(any(feature = "napi", target_os = "wasi"))] js_config_loader: Option<
+            &JsConfigLoaderCb,
+        >,
     ) -> Result<Self, String> {
         let load_err = |err: String| format!("Failed to load configuration file.\n{err}");
 
@@ -41,7 +43,7 @@ impl ConfigScopes {
             load_editorconfig(resolve_editorconfig_path(cwd).as_deref()).map_err(load_err)?;
         let loader = ConfigLoader::new(
             editorconfig,
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             js_config_loader.cloned(),
         );
         let mut root = loader.load_root(cwd, explicit_config).map_err(load_err)?;

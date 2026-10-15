@@ -268,11 +268,14 @@ impl Config {
         let rules =
             rules.into_iter().filter(|(_, severity)| severity.is_warn_deny()).collect::<Vec<_>>();
 
-        let external_rules = external_rules
+        let mut external_rules = external_rules
             .into_iter()
             .filter(|(_, (_, severity))| severity.is_warn_deny())
             .map(|(rule_id, (options_id, severity))| (rule_id, options_id, severity))
             .collect::<Vec<_>>();
+        // Same order as without overrides (see `ConfigStoreBuilder::build`), not hash map order,
+        // which differs between platforms
+        external_rules.sort_unstable_by_key(|(rule_id, _, _)| *rule_id);
 
         ResolvedLinterState {
             rules: Arc::from(rules.into_boxed_slice()),
