@@ -6,18 +6,17 @@
 // Rule::from_configuration returns Result but documenting errors is not useful here.
 #![expect(clippy::missing_errors_doc)]
 
-use std::{
-    iter,
-    path::Path,
-    ptr::{self, NonNull},
-    rc::Rc,
-    string::ToString,
-    time::Duration,
-};
+#[cfg(all(target_pointer_width = "64", target_endian = "little"))]
+use std::ptr::{self, NonNull};
+use std::{iter, path::Path, rc::Rc, string::ToString, time::Duration};
 
-use oxc_allocator::{Allocator, AllocatorPool, ArenaVec, CloneIn, TakeIn};
+use oxc_allocator::{Allocator, AllocatorPool};
+#[cfg(all(target_pointer_width = "64", target_endian = "little"))]
+use oxc_allocator::{ArenaVec, CloneIn, TakeIn};
+#[cfg(all(target_pointer_width = "64", target_endian = "little"))]
+use oxc_ast::ast::Program;
 use oxc_ast::{
-    ast::{Comment, CommentContent, CommentKind, Program},
+    ast::{Comment, CommentContent, CommentKind},
     ast_kind::AST_TYPE_MAX,
 };
 use oxc_ast_macros::ast;
@@ -25,8 +24,11 @@ use oxc_ast_visit::utf8_to_utf16::Utf8ToUtf16;
 use oxc_data_structures::box_macros::boxed_array;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_estree_tokens::update_tokens_as_js;
+#[cfg(all(target_pointer_width = "64", target_endian = "little"))]
 use oxc_parser::Token;
 use oxc_semantic::{AstNode, Semantic};
+#[cfg(target_os = "wasi")]
+use oxc_span::SourceType;
 use oxc_span::Span;
 
 mod ast_util;
@@ -69,6 +71,8 @@ pub use crate::disable_directives::{
     DirectivePrefix, DisableDirectives, DisableRuleComment, RuleCommentRule, RuleCommentType,
     create_unused_directives_diagnostics,
 };
+#[cfg(target_os = "wasi")]
+pub use crate::external_linter::LintFileSource;
 pub use crate::{
     config::{
         Config, ConfigBuilderError, ConfigStore, ConfigStoreBuilder, ESLintRule, LintIgnoreMatcher,
@@ -78,8 +82,8 @@ pub use crate::{
     external_linter::{
         ExternalLinter, ExternalLinterCreateWorkspaceCb, ExternalLinterDestroyWorkspaceCb,
         ExternalLinterLintFileCb, ExternalLinterLoadPluginCb, ExternalLinterSetupRuleConfigsCb,
-        JsFix, LintFileFailure, LintFileOutput, LintFileResult, LintFileTiming, LintFileTimings,
-        LoadPluginResult, convert_and_merge_js_fixes,
+        JsFix, LintFileData, LintFileFailure, LintFileOutput, LintFileResult, LintFileTiming,
+        LintFileTimings, LoadPluginResult, convert_and_merge_js_fixes,
     },
     external_plugin_store::{ExternalOptionsId, ExternalPluginStore, ExternalRuleId},
     fixer::{Fix, FixKind, Fixer, Message, PossibleFixes, oxc_code_short_canonical_name},
@@ -631,7 +635,10 @@ impl Linter {
         );
     }
 
-    #[cfg(not(all(target_pointer_width = "64", target_endian = "little")))]
+    #[cfg(not(any(
+        all(target_pointer_width = "64", target_endian = "little"),
+        target_os = "wasi"
+    )))]
     fn run_external_rules<'a>(
         &self,
         _external_rules: &[(ExternalRuleId, ExternalOptionsId, AllowWarnDeny)],
@@ -736,55 +743,15 @@ impl Linter {
         allocator: &Allocator,
         rule_timing_store: Option<&RuleTimingStore>,
     ) {
-        // If has BOM, remove it
-        const BOM: &str = "\u{feff}";
-        const BOM_LEN: usize = BOM.len();
-
         let original_source_text = program.source_text;
-        let mut source_text = original_source_text;
-        let has_bom = source_text.starts_with(BOM);
-        if has_bom {
-            source_text = &source_text[BOM_LEN..];
-            program.source_text = source_text;
-        }
-
-        // If partial source (Vue/Astro/Svelte), trim the leading newline after `<script>`
-        let is_partial = !has_bom && ctx_host.current_sub_host().source_text_offset() > 0;
-        let trim_leading = match source_text.as_bytes() {
-            [b'\r', b'\n', ..] if is_partial => 2u32,
-            [b'\n', ..] if is_partial => 1,
-            _ => 0,
-        };
-        if trim_leading > 0 {
-            source_text = &source_text[trim_leading as usize..];
-            program.source_text = source_text;
-        }
-
-        #[expect(clippy::cast_possible_truncation)]
-        let source_text_utf8_end =
-            source_text.len() as u32 + if has_bom { BOM_LEN as u32 } else { trim_leading };
-
-        // Create span converter.
-        // If source starts with BOM, create converter which ignores the BOM.
-        let span_converter = if has_bom {
-            #[expect(clippy::cast_possible_truncation)]
-            Utf8ToUtf16::new_with_offset(source_text, BOM_LEN as u32)
-        } else if trim_leading > 0 {
-            Utf8ToUtf16::new_with_offset(source_text, trim_leading)
-        } else {
-            Utf8ToUtf16::new(source_text)
-        };
-
-        // Convert the end of the (trimmed) source text to the UTF-16 offsets used by JS plugins.
-        let mut source_text_utf16_len = source_text_utf8_end;
-        if let Some(mut converter) = span_converter.converter() {
-            converter.convert_offset(&mut source_text_utf16_len);
-        }
+        let js_source = JsSourceText::new(original_source_text, ctx_host);
+        program.source_text = js_source.text;
+        let span_converter = &js_source.span_converter;
 
         // Convert token spans to UTF-16 and update token kinds
         #[expect(clippy::if_not_else, clippy::cast_possible_truncation)]
         let (tokens_offset, tokens_len) = if !tokens.is_empty() {
-            update_tokens_as_js(tokens, program, &span_converter);
+            update_tokens_as_js(tokens, program, span_converter);
             (tokens.as_ptr() as u32, tokens.len() as u32)
         } else {
             (0, 0)
@@ -796,16 +763,7 @@ impl Linter {
         // Convert comment spans to UTF-16.
         // Also set the `content` field of each comment to `None` (0).
         // JS side uses this byte as a "deserialized" flag for tracking lazy deserialization.
-        if let Some(mut converter) = span_converter.converter() {
-            for comment in &mut program.comments {
-                converter.convert_span(&mut comment.span);
-                comment.content = CommentContent::None;
-            }
-        } else {
-            for comment in &mut program.comments {
-                comment.content = CommentContent::None;
-            }
-        }
+        convert_comments_for_js(&mut program.comments, span_converter);
 
         // Get offset of `Program` within buffer (bottom 32 bits of pointer)
         let program_offset = ptr::from_ref(program) as u32;
@@ -817,7 +775,7 @@ impl Linter {
             program_offset,
             is_ts,
             is_jsx,
-            has_bom,
+            js_source.has_bom,
             tokens_offset,
             tokens_len,
         );
@@ -836,6 +794,95 @@ impl Linter {
             );
             metadata_ptr.write(metadata);
         }
+
+        self.call_external_linter(
+            external_rules,
+            path,
+            ctx_host,
+            allocator,
+            original_source_text,
+            &js_source,
+            rule_timing_store,
+        );
+    }
+
+    /// Run external rules on `wasm32-wasip1`, which has no raw transfer.
+    ///
+    /// JS side gets the source text, and parses it itself. Tokens and comments are prepared as for
+    /// raw transfer, but in copies, so the AST stays intact.
+    #[cfg(target_os = "wasi")]
+    #[expect(clippy::needless_pass_by_ref_mut, reason = "same signature as with raw transfer")]
+    fn run_external_rules<'a>(
+        &self,
+        external_rules: &[(ExternalRuleId, ExternalOptionsId, AllowWarnDeny)],
+        path: &Path,
+        ctx_host: &mut Rc<ContextHost<'a>>,
+        _allocator: &'a Allocator,
+        _js_allocator_pool: Option<&AllocatorPool>,
+        rule_timing_store: Option<&RuleTimingStore>,
+    ) {
+        if external_rules.is_empty() {
+            return;
+        }
+
+        let program = ctx_host.semantic().nodes().program();
+        let js_source = JsSourceText::new(program.source_text, ctx_host);
+
+        let mut tokens = ctx_host.parser_tokens().to_vec();
+        if !tokens.is_empty() {
+            update_tokens_as_js(&mut tokens, program, &js_source.span_converter);
+        }
+
+        // If file has a hashbang, add it to comments.
+        // It will be converted to a `Shebang` comment on JS side.
+        let hashbang = program.hashbang.as_ref().map(|hashbang| {
+            Comment::new(hashbang.span.start, hashbang.span.end, CommentKind::Line)
+        });
+        let mut comments =
+            hashbang.into_iter().chain(program.comments.iter().cloned()).collect::<Vec<_>>();
+        convert_comments_for_js(&mut comments, &js_source.span_converter);
+
+        // JS side must parse the file the same way. The parser resolves an unambiguous module kind,
+        // which comes from the file extension (see `Runtime::get_source_type_and_text`).
+        let source_type = if SourceType::from_path(path).is_ok_and(SourceType::is_unambiguous) {
+            program.source_type.with_unambiguous(true)
+        } else {
+            program.source_type
+        };
+
+        let source = LintFileSource {
+            source_text: js_source.text,
+            source_type,
+            has_bom: js_source.has_bom,
+            tokens: &tokens,
+            comments: &comments,
+        };
+        self.call_external_linter(
+            external_rules,
+            path,
+            ctx_host,
+            &source,
+            program.source_text,
+            &js_source,
+            rule_timing_store,
+        );
+    }
+
+    /// Call external linter, and process diagnostics.
+    #[cfg(any(all(target_pointer_width = "64", target_endian = "little"), target_os = "wasi"))]
+    #[expect(clippy::too_many_arguments)]
+    fn call_external_linter(
+        &self,
+        external_rules: &[(ExternalRuleId, ExternalOptionsId, AllowWarnDeny)],
+        path: &Path,
+        ctx_host: &ContextHost<'_>,
+        data: LintFileData<'_>,
+        original_source_text: &str,
+        js_source: &JsSourceText<'_>,
+        rule_timing_store: Option<&RuleTimingStore>,
+    ) {
+        let JsSourceText { has_bom, ref span_converter, utf16_len: source_text_utf16_len, .. } =
+            *js_source;
 
         let path_string = path.to_string_lossy();
         let path_string = path_string.as_ref();
@@ -872,7 +919,7 @@ impl Linter {
             globals_json,
             rule_timing_store.is_some(),
             self.workspace_uri.as_ref().map(ToString::to_string),
-            allocator,
+            data,
         );
         match result {
             Ok(LintFileOutput { diagnostics, timings }) => {
@@ -907,7 +954,7 @@ impl Linter {
                     let create_fix = |fixes, fix_kind| match convert_and_merge_js_fixes(
                         fixes,
                         original_source_text,
-                        &span_converter,
+                        span_converter,
                         has_bom,
                     ) {
                         Ok(fix) => Some(fix.with_kind(fix_kind)),
@@ -1014,6 +1061,83 @@ impl Linter {
 
     fn duration_from_millis(duration_ms: f64) -> Option<Duration> {
         Duration::try_from_secs_f64(duration_ms / 1000.0).ok()
+    }
+}
+
+/// Source text as JS plugins see it.
+#[cfg(any(all(target_pointer_width = "64", target_endian = "little"), target_os = "wasi"))]
+struct JsSourceText<'s> {
+    /// Source text without a BOM. For a `<script>` block of a Vue / Astro / Svelte file,
+    /// also without the leading newline.
+    text: &'s str,
+    has_bom: bool,
+    /// Converts UTF-8 offsets in the original source text to UTF-16 offsets in `text`.
+    span_converter: Utf8ToUtf16,
+    /// UTF-16 offset of the end of `text`.
+    utf16_len: u32,
+}
+
+#[cfg(any(all(target_pointer_width = "64", target_endian = "little"), target_os = "wasi"))]
+impl<'s> JsSourceText<'s> {
+    fn new(source_text: &'s str, ctx_host: &ContextHost<'_>) -> Self {
+        // If has BOM, remove it
+        const BOM: &str = "\u{feff}";
+        const BOM_LEN: usize = BOM.len();
+
+        let mut text = source_text;
+        let has_bom = text.starts_with(BOM);
+        if has_bom {
+            text = &text[BOM_LEN..];
+        }
+
+        // If partial source (Vue/Astro/Svelte), trim the leading newline after `<script>`
+        let is_partial = !has_bom && ctx_host.current_sub_host().source_text_offset() > 0;
+        let trim_leading = match text.as_bytes() {
+            [b'\r', b'\n', ..] if is_partial => 2u32,
+            [b'\n', ..] if is_partial => 1,
+            _ => 0,
+        };
+        if trim_leading > 0 {
+            text = &text[trim_leading as usize..];
+        }
+
+        #[expect(clippy::cast_possible_truncation)]
+        let utf8_end = text.len() as u32 + if has_bom { BOM_LEN as u32 } else { trim_leading };
+
+        // Create span converter.
+        // If source starts with BOM, create converter which ignores the BOM.
+        let span_converter = if has_bom {
+            #[expect(clippy::cast_possible_truncation)]
+            Utf8ToUtf16::new_with_offset(text, BOM_LEN as u32)
+        } else if trim_leading > 0 {
+            Utf8ToUtf16::new_with_offset(text, trim_leading)
+        } else {
+            Utf8ToUtf16::new(text)
+        };
+
+        // Convert the end of the (trimmed) source text to the UTF-16 offsets used by JS plugins.
+        let mut utf16_len = utf8_end;
+        if let Some(mut converter) = span_converter.converter() {
+            converter.convert_offset(&mut utf16_len);
+        }
+
+        Self { text, has_bom, span_converter, utf16_len }
+    }
+}
+
+/// Convert comment spans to UTF-16, and set the `content` field of each comment to `None` (0).
+/// JS side uses this byte as a "deserialized" flag for tracking lazy deserialization.
+#[cfg(any(all(target_pointer_width = "64", target_endian = "little"), target_os = "wasi"))]
+fn convert_comments_for_js(comments: &mut [Comment], span_converter: &Utf8ToUtf16) {
+    if let Some(mut converter) = span_converter.converter() {
+        for comment in comments {
+            converter.convert_span(&mut comment.span);
+            comment.content = CommentContent::None;
+        }
+    } else {
+        for comment in comments {
+            comment.content = CommentContent::None;
+        }
     }
 }
 

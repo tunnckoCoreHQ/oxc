@@ -34,6 +34,10 @@ import type { RuleTiming } from "./timing.ts";
 // until the process exits.
 export const buffers: (BufferWithArrays | null)[] = [];
 
+// `bufferId` passed to `lintFile` when there is no buffer, and caller has set up the file source
+// with `setupSourceFromFileSource` (`wasm32-wasip1` host, which has no raw transfer).
+export const NO_BUFFER_ID = -1;
+
 // Array of `after` hooks to run after traversal. This array reused for every file.
 const afterHooks: AfterHook[] = [];
 
@@ -47,7 +51,7 @@ const OPTIONS_DESCRIPTOR: PropertyDescriptor = { value: null };
  * Main logic is in separate function `lintFileImpl`, because V8 cannot optimize functions containing try/catch.
  *
  * @param filePath - Absolute path of file being linted
- * @param bufferId - ID of buffer containing file data
+ * @param bufferId - ID of buffer containing file data, or `NO_BUFFER_ID`
  * @param buffer - Buffer containing file data, or `null` if buffer with this ID was previously sent to JS
  * @param ruleIds - IDs of rules to run on this file
  * @param optionsIds - IDs of options to use for rules on this file, in same order as `ruleIds`
@@ -119,7 +123,7 @@ export function lintFile(
  * Run rules on a file.
  *
  * @param filePath - Absolute path of file being linted
- * @param bufferId - ID of buffer containing file data
+ * @param bufferId - ID of buffer containing file data, or `NO_BUFFER_ID`
  * @param buffer - Buffer containing file data, or `null` if buffer with this ID was previously sent to JS
  * @param ruleIds - IDs of rules to run on this file
  * @param optionsIds - IDs of options to use for rules on this file, in same order as `ruleIds`
@@ -141,25 +145,10 @@ export function lintFileImpl(
   workspaceUri: string | null,
   timings: RuleTiming[] | null = null,
 ): void {
-  // If new buffer, add it to `buffers` array. Otherwise, get existing buffer from array.
+  // Get buffer, unless caller has set up the file source with `setupSourceFromFileSource`.
   // Do this before checks below, to make sure buffer doesn't get garbage collected when not expected
   // if there's an error.
-  // TODO: Is this enough to guarantee soundness?
-  if (buffer === null) {
-    // Rust will only send a `bufferId` alone, if it previously sent a buffer with this same ID
-    buffer = buffers[bufferId]!;
-  } else {
-    typeAssertIs<BufferWithArrays>(buffer);
-    const { buffer: arrayBuffer, byteOffset } = buffer;
-    buffer.int32 = new Int32Array(arrayBuffer, byteOffset);
-    buffer.float64 = new Float64Array(arrayBuffer, byteOffset);
-
-    for (let i = bufferId - buffers.length; i >= 0; i--) {
-      buffers.push(null);
-    }
-    buffers[bufferId] = buffer;
-  }
-  typeAssertIs<BufferWithArrays>(buffer);
+  const fileBuffer = bufferId === NO_BUFFER_ID ? null : getBuffer(bufferId, buffer);
 
   // Debug asserts that input is valid
   debugAssert(
@@ -202,8 +191,7 @@ export function lintFileImpl(
   //
   // But... source text and AST can be accessed in body of `create` method, or `before` hook, via `context.sourceCode`.
   // So we pass the buffer to source code module here, so it can decode source text / deserialize AST on demand.
-  const hasBOM = buffer[HAS_BOM_FLAG_POS] === 1;
-  setupSourceForFile(buffer, hasBOM);
+  if (fileBuffer !== null) setupSourceForFile(fileBuffer, fileBuffer[HAS_BOM_FLAG_POS] === 1);
 
   // Pass settings and globals JSON to modules that handle them
   setSettingsForFile(settingsJSON);
@@ -287,6 +275,35 @@ export function lintFileImpl(
 
   // Run any `after` hooks
   runAfterHooks(true);
+}
+
+/**
+ * Get buffer with ID `bufferId`.
+ *
+ * If new buffer, add it to `buffers` array. Otherwise, get existing buffer from array.
+ *
+ * @param bufferId - ID of buffer containing file data
+ * @param buffer - Buffer containing file data, or `null` if buffer with this ID was previously sent to JS
+ * @returns Buffer
+ */
+function getBuffer(bufferId: number, buffer: Uint8Array | null): BufferWithArrays {
+  // TODO: Is this enough to guarantee soundness?
+  if (buffer === null) {
+    // Rust will only send a `bufferId` alone, if it previously sent a buffer with this same ID
+    buffer = buffers[bufferId]!;
+  } else {
+    typeAssertIs<BufferWithArrays>(buffer);
+    const { buffer: arrayBuffer, byteOffset } = buffer;
+    buffer.int32 = new Int32Array(arrayBuffer, byteOffset);
+    buffer.float64 = new Float64Array(arrayBuffer, byteOffset);
+
+    for (let i = bufferId - buffers.length; i >= 0; i--) {
+      buffers.push(null);
+    }
+    buffers[bufferId] = buffer;
+  }
+  typeAssertIs<BufferWithArrays>(buffer);
+  return buffer;
 }
 
 /**

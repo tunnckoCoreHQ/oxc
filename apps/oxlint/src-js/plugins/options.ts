@@ -95,6 +95,9 @@ AJV.addMetaSchema(metaSchema);
 // Ajv internal API
 (AJV._opts as { defaultMeta: string }).defaultMeta = metaSchema.id;
 
+// Validators compiled by `compileSchema`, keyed by `rule.meta.schema`
+const schemaValidators = new WeakMap<object, SchemaValidator>();
+
 /**
  * Compile a rule's schema into a validator function.
  *
@@ -124,20 +127,21 @@ export function compileSchema(
     throw new TypeError("`rule.meta.schema` must be an array, object, or `false` if provided");
   }
 
-  if (Array.isArray(schema)) {
-    // If schema is empty array, return `null`, indicating that rule does not accept any options
-    if (schema.length === 0) return null;
+  // If schema is empty array, return `null`, indicating that rule does not accept any options
+  if (Array.isArray(schema) && schema.length === 0) return null;
 
-    schema = {
-      type: "array",
-      items: schema,
-      minItems: 0,
-      maxItems: schema.length,
-    };
-  }
+  // Reuse validator compiled before for the same schema.
+  // AJV generates code, which some runtimes only allow at startup (Cloudflare Workers),
+  // so a host can compile schemas early, before it loads the plugin. See `wasi.ts`.
+  let validator = schemaValidators.get(schema);
+  if (validator !== undefined) return validator;
 
-  const validate = AJV.compile(schema);
-  return wrapSchemaValidator(validate);
+  const jsonSchema = Array.isArray(schema)
+    ? { type: "array", items: schema, minItems: 0, maxItems: schema.length }
+    : schema;
+  validator = wrapSchemaValidator(AJV.compile(jsonSchema));
+  schemaValidators.set(schema, validator);
+  return validator;
 }
 
 /**

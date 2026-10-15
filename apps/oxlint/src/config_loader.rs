@@ -21,12 +21,12 @@ use crate::utils::normalize_path;
 const GIT_DIR: &str = ".git";
 const NODE_MODULES_DIR: &str = "node_modules";
 
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use crate::js_config;
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use crate::js_config::JsConfigResult;
 
-#[cfg(not(feature = "napi"))]
+#[cfg(not(any(feature = "napi", target_os = "wasi")))]
 pub struct JsConfigResult {
     pub config: Option<Oxlintrc>,
 }
@@ -252,7 +252,7 @@ pub struct ConfigLoader<'a> {
     external_plugin_store: &'a mut ExternalPluginStore,
     filters: &'a [LintFilter],
     workspace_uri: Option<&'a str>,
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     #[expect(clippy::struct_field_names)]
     js_config_loader: Option<&'a js_config::JsConfigLoaderCb>,
 }
@@ -276,12 +276,12 @@ impl<'a> ConfigLoader<'a> {
             external_plugin_store,
             filters,
             workspace_uri,
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             js_config_loader: None,
         }
     }
 
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     #[must_use]
     pub fn with_js_config_loader(
         mut self,
@@ -308,12 +308,12 @@ impl<'a> ConfigLoader<'a> {
             return Ok(Vec::new());
         }
 
-        #[cfg(not(feature = "napi"))]
+        #[cfg(not(any(feature = "napi", target_os = "wasi")))]
         {
             return Err(vec![ConfigLoadError::JsConfigFileFoundButJsRuntimeNotAvailable]);
         }
 
-        #[cfg(feature = "napi")]
+        #[cfg(any(feature = "napi", target_os = "wasi"))]
         {
             let Some(js_config_loader) = self.js_config_loader else {
                 return Err(vec![ConfigLoadError::JsConfigFileFoundButJsRuntimeNotAvailable]);

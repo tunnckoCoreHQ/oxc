@@ -2,10 +2,9 @@
  * Token types and tokens initialization / reset.
  */
 
-import { buffer, initSourceText, sourceText } from "./source_code.ts";
+import { getTokensBytes, initSourceText, sourceText } from "./source_code.ts";
 import { computeLoc } from "./location.ts";
 import { MERGED_SIZE } from "./tokens_and_comments.ts";
-import { TOKENS_OFFSET_POS_32, TOKENS_LEN_POS_32 } from "../generated/constants.ts";
 import { EMPTY_INT32_ARRAY } from "../utils/typed_arrays.ts";
 import { debugAssert, debugAssertIsNonNull } from "../utils/asserts.ts";
 
@@ -335,24 +334,21 @@ export function deserializeTokens(): void {
 export function initTokensBuffer(): void {
   debugAssert(tokensUint8 === null && tokensInt32 === null, "Tokens buffer already initialized");
 
-  debugAssertIsNonNull(buffer);
-
   // Various tokens methods rely on `sourceText` being initialized after `initTokensBuffer`,
   // so we always initialize it here, even if there are no tokens (empty file)
   if (sourceText === null) initSourceText();
   debugAssertIsNonNull(sourceText);
 
-  const { int32 } = buffer;
-  const tokensPos = int32[TOKENS_OFFSET_POS_32];
-  tokensLen = int32[TOKENS_LEN_POS_32];
-
   // Create typed array views over just the tokens region of the buffer.
   // These are zero-copy views over the same underlying `ArrayBuffer`.
   // Views persist for the lifetime of the file (cleared in `resetTokens`).
-  const arrayBuffer = buffer.buffer,
-    absolutePos = buffer.byteOffset + tokensPos;
-  tokensUint8 = new Uint8Array(arrayBuffer, absolutePos, tokensLen << TOKEN_SIZE_SHIFT);
-  tokensInt32 = new Int32Array(arrayBuffer, absolutePos, tokensLen << TOKEN_SIZE32_SHIFT);
+  tokensUint8 = getTokensBytes();
+  tokensLen = tokensUint8.length >> TOKEN_SIZE_SHIFT;
+  tokensInt32 = new Int32Array(
+    tokensUint8.buffer,
+    tokensUint8.byteOffset,
+    tokensLen << TOKEN_SIZE32_SHIFT,
+  );
 
   // Grow caches if needed. After first few files, caches should have grown large enough to service all files.
   // Later files will skip this step, and allocations stop.

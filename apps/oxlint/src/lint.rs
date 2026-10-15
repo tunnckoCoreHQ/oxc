@@ -21,7 +21,7 @@ use oxc_linter::{
     LintServiceOptions, Linter, OxlintSuppressionFileAction, RuleTimingStore, SuppressionManager,
 };
 
-#[cfg(feature = "napi")]
+#[cfg(any(feature = "napi", target_os = "wasi"))]
 use crate::js_config::JsConfigLoaderCb;
 use crate::{
     cli::{
@@ -42,7 +42,7 @@ pub struct CliRunner {
     external_linter: Option<ExternalLinter>,
     /// Callback for loading JavaScript/TypeScript config files (experimental).
     /// This is only available when running via Node.js with NAPI.
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     js_config_loader: Option<JsConfigLoaderCb>,
 }
 
@@ -53,7 +53,7 @@ impl Debug for CliRunner {
             "external_linter",
             if self.external_linter.is_some() { &"Some(ExternalLinter)" } else { &"None" },
         );
-        #[cfg(feature = "napi")]
+        #[cfg(any(feature = "napi", target_os = "wasi"))]
         s.field(
             "js_config_loader",
             if self.js_config_loader.is_some() { &"Some(JsConfigLoaderCb)" } else { &"None" },
@@ -69,7 +69,7 @@ impl CliRunner {
             options,
             cwd: env::current_dir().expect("Failed to get current working directory"),
             external_linter,
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             js_config_loader: None,
         }
     }
@@ -254,7 +254,7 @@ impl CliRunner {
         let config_result = {
             let mut config_loader =
                 ConfigLoader::new(external_linter, &mut external_plugin_store, &filters, None);
-            #[cfg(feature = "napi")]
+            #[cfg(any(feature = "napi", target_os = "wasi"))]
             {
                 config_loader = config_loader.with_js_config_loader(self.js_config_loader.as_ref());
             }
@@ -628,7 +628,7 @@ impl CliRunner {
         self
     }
 
-    #[cfg(feature = "napi")]
+    #[cfg(any(feature = "napi", target_os = "wasi"))]
     #[must_use]
     pub fn with_config_loader(mut self, config_loader: Option<JsConfigLoaderCb>) -> Self {
         self.js_config_loader = config_loader;

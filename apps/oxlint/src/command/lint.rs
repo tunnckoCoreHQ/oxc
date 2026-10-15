@@ -100,6 +100,7 @@ impl LintCommand {
     /// the same Node process. The thread count from the first call wins;
     /// subsequent calls keep that pool.
     #[expect(clippy::print_stderr)]
+    #[cfg_attr(target_os = "wasi", expect(unreachable_code))]
     fn init_rayon_thread_pool(threads: Option<usize>) {
         static RAYON_INIT: OnceLock<()> = OnceLock::new();
 
@@ -118,6 +119,21 @@ impl LintCommand {
         //
         // To ensure we continue to have a "locked" thread count, even after future Rayon upgrades,
         // we always initialize the thread pool and explicitly specify thread count here.
+
+        // `wasm32-wasip1` has no threads: run everything on the main thread, which joins the
+        // pool as its only worker so `rayon::scope`/`yield_now` run queued jobs inline.
+        #[cfg(target_os = "wasi")]
+        {
+            let _ = threads;
+            RAYON_INIT.get_or_init(|| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(1)
+                    .use_current_thread()
+                    .build_global()
+                    .unwrap();
+            });
+            return;
+        }
 
         let thread_count = if let Some(thread_count) = threads
             && thread_count > 0

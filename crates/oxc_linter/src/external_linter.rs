@@ -2,8 +2,15 @@ use std::{fmt::Debug, sync::Arc};
 
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 
+#[cfg(not(target_os = "wasi"))]
 use oxc_allocator::Allocator;
+#[cfg(target_os = "wasi")]
+use oxc_ast::ast::Comment;
 use oxc_ast_visit::utf8_to_utf16::Utf8ToUtf16;
+#[cfg(target_os = "wasi")]
+use oxc_parser::Token;
+#[cfg(target_os = "wasi")]
+use oxc_span::SourceType;
 use oxc_span::Span;
 
 use crate::{
@@ -58,13 +65,35 @@ pub type ExternalLinterLintFileCb = Arc<
                 // Workspace URI (e.g. `file:///path/to/workspace`).
                 // `None` in CLI mode (single workspace), `Some` in LSP mode.
                 Option<String>,
-                // Allocator
-                &Allocator,
+                // Allocator, or file source on `wasm32-wasip1`
+                LintFileData<'_>,
             ) -> Result<LintFileOutput, LintFileFailure>
             + Sync
             + Send,
     >,
 >;
+
+/// What `lint_file` sends to JS: the fixed-size [`Allocator`] which holds the AST (raw transfer).
+#[cfg(not(target_os = "wasi"))]
+pub type LintFileData<'a> = &'a Allocator;
+
+/// What `lint_file` sends to JS: the file source (`wasm32-wasip1`, which has no raw transfer).
+#[cfg(target_os = "wasi")]
+pub type LintFileData<'a> = &'a LintFileSource<'a>;
+
+/// A file for JS plugins on `wasm32-wasip1`.
+///
+/// The host parses `source_text` itself. Tokens and comments are in their raw transfer layout,
+/// with UTF-16 spans, and tokens have ESTree kinds, as raw transfer sends them.
+#[cfg(target_os = "wasi")]
+pub struct LintFileSource<'a> {
+    /// Source text, without a BOM.
+    pub source_text: &'a str,
+    pub source_type: SourceType,
+    pub has_bom: bool,
+    pub tokens: &'a [Token],
+    pub comments: &'a [Comment],
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

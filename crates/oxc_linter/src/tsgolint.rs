@@ -1,3 +1,4 @@
+#[cfg_attr(target_os = "wasi", expect(unused_imports))]
 use std::{
     borrow::Cow,
     collections::BTreeSet,
@@ -23,10 +24,121 @@ use crate::{
     RuleTimingStore, WEBSITE_BASE_RULES_URL, suppression::DiffManager,
 };
 
+#[cfg(not(target_os = "wasi"))]
+use std::{
+    process::{Child as TsGoLintChild, ChildStdout as TsGoLintStdout},
+    thread::spawn as spawn_thread,
+};
+#[cfg(target_os = "wasi")]
+use wasi_host::{Child as TsGoLintChild, ChildStdout as TsGoLintStdout, spawn_thread};
+
+/// `wasm32-wasip1` has no processes or threads. The host runs `tsgolint` through the
+/// `oxlint_host.tsgolint_run` import, over the same filesystem oxlint sees, so it reads the files
+/// after oxlint's own fixes, as the native child process does. Its complete stdout is parsed with
+/// the regular message stream parser.
+#[cfg(target_os = "wasi")]
+mod wasi_host {
+    use std::{fmt, io::Cursor, path::Path};
+
+    #[link(wasm_import_module = "oxlint_host")]
+    unsafe extern "C" {
+        /// Run `tsgolint <args>` to completion in `cwd`, with `stdin` as its standard input.
+        /// `args` are NUL-separated. Returns the exit code, or a negative number if the host
+        /// could not run tsgolint. The response is the stdout, or the error message.
+        fn tsgolint_run(
+            cwd: *const u8,
+            cwd_len: usize,
+            args: *const u8,
+            args_len: usize,
+            stdin: *const u8,
+            stdin_len: usize,
+        ) -> i32;
+        fn response_len() -> usize;
+        fn response_read(dst_ptr: *mut u8);
+    }
+
+    pub type ChildStdout = Cursor<Vec<u8>>;
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct ExitStatus(i32);
+
+    impl ExitStatus {
+        pub fn success(self) -> bool {
+            self.0 == 0
+        }
+    }
+
+    impl fmt::Display for ExitStatus {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "exit status: {}", self.0)
+        }
+    }
+
+    /// A finished `tsgolint` run, shaped like `std::process::Child`.
+    pub struct Child {
+        pub stdout: Option<ChildStdout>,
+        status: ExitStatus,
+    }
+
+    impl Child {
+        #[expect(clippy::unnecessary_wraps)]
+        pub fn wait(&self) -> std::io::Result<ExitStatus> {
+            Ok(self.status)
+        }
+
+        #[expect(clippy::unnecessary_wraps, clippy::unused_self)]
+        pub fn kill(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn run(cwd: &Path, args: &[String], stdin: &[u8]) -> Result<Child, String> {
+        let cwd = cwd.to_string_lossy();
+        let args = args.join("\0");
+        // SAFETY: the host only reads the slices during the call,
+        // and copies exactly `response_len()` bytes to the buffer.
+        let (code, response) = unsafe {
+            let code = tsgolint_run(
+                cwd.as_ptr(),
+                cwd.len(),
+                args.as_ptr(),
+                args.len(),
+                stdin.as_ptr(),
+                stdin.len(),
+            );
+            let mut response = vec![0; response_len()];
+            response_read(response.as_mut_ptr());
+            (code, response)
+        };
+        if code < 0 {
+            return Err(format!(
+                "Failed to run tsgolint through the host: {}",
+                String::from_utf8_lossy(&response)
+            ));
+        }
+        Ok(Child { stdout: Some(Cursor::new(response)), status: ExitStatus(code) })
+    }
+
+    /// Run `f` on the current thread; `join` returns its result.
+    pub fn spawn_thread<T>(f: impl FnOnce() -> T) -> Finished<T> {
+        Finished(f())
+    }
+
+    pub struct Finished<T>(T);
+
+    impl<T> Finished<T> {
+        #[expect(clippy::unnecessary_wraps)]
+        pub fn join(self) -> std::thread::Result<T> {
+            Ok(self.0)
+        }
+    }
+}
+
 /// State required to initialize the `tsgolint` linter.
 #[derive(Debug, Clone)]
 pub struct TsGoLintState {
     /// The path to the `tsgolint` executable (at least our best guess at it).
+    #[cfg_attr(target_os = "wasi", expect(dead_code, reason = "the host runs tsgolint"))]
     executable_path: PathBuf,
     /// Current working directory, used for rendering paths in diagnostics.
     cwd: PathBuf,
@@ -180,13 +292,13 @@ impl TsGoLintState {
 
         let diff_manager_clone_to_ts_go = Arc::<DiffManager>::clone(diff_manager);
 
-        let handler = std::thread::spawn(move || {
+        let handler = spawn_thread(move || {
             let mut child = self.spawn_tsgolint(&json_input)?;
 
             let stdout = child.stdout.take().expect("Failed to open tsgolint stdout");
 
             // Process stdout stream in a separate thread to send diagnostics as they arrive
-            let stdout_handler = std::thread::spawn(move || -> Result<TsGoLintOutput, String> {
+            let stdout_handler = spawn_thread(move || -> Result<TsGoLintOutput, String> {
                 let disable_directives_map =
                     disable_directives_map.lock().expect("disable_directives_map mutex poisoned");
 
@@ -356,38 +468,53 @@ impl TsGoLintState {
         }
     }
 
-    /// Spawn the tsgolint process with the given input.
-    fn spawn_tsgolint(&self, json_input: &Payload) -> Result<std::process::Child, String> {
-        let mut cmd = std::process::Command::new(&self.executable_path);
-        cmd.arg("headless")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(stderr());
+    /// Command line arguments for `tsgolint`.
+    fn tsgolint_args(&self) -> Vec<String> {
+        let mut args = vec!["headless".to_string()];
 
         if self.timings {
-            cmd.args(["-debug", "timings"]);
+            args.extend(["-debug".to_string(), "timings".to_string()]);
         }
 
         if self.fix {
-            cmd.arg("-fix");
+            args.push("-fix".to_string());
         }
 
         if self.fix_suggestions {
-            cmd.arg("-fix-suggestions");
+            args.push("-fix-suggestions".to_string());
         }
 
         if let Ok(trace_file) = std::env::var("OXLINT_TSGOLINT_TRACE") {
-            cmd.arg(format!("-trace={trace_file}"));
+            args.push(format!("-trace={trace_file}"));
         }
         if let Ok(cpuprof_file) = std::env::var("OXLINT_TSGOLINT_CPU") {
-            cmd.arg(format!("-cpuprof={cpuprof_file}"));
+            args.push(format!("-cpuprof={cpuprof_file}"));
         }
         if let Ok(heap_file) = std::env::var("OXLINT_TSGOLINT_HEAP") {
-            cmd.arg(format!("-heap={heap_file}"));
+            args.push(format!("-heap={heap_file}"));
         }
         if let Ok(allocs_file) = std::env::var("OXLINT_TSGOLINT_ALLOCS") {
-            cmd.arg(format!("-allocs={allocs_file}"));
+            args.push(format!("-allocs={allocs_file}"));
         }
+
+        args
+    }
+
+    /// Run tsgolint through the host with the given input (`wasm32-wasip1`).
+    #[cfg(target_os = "wasi")]
+    fn spawn_tsgolint(&self, json_input: &Payload) -> Result<TsGoLintChild, String> {
+        let json = serde_json::to_string(json_input).expect("Failed to serialize JSON");
+        wasi_host::run(&self.cwd, &self.tsgolint_args(), json.as_bytes())
+    }
+
+    /// Spawn the tsgolint process with the given input.
+    #[cfg(not(target_os = "wasi"))]
+    fn spawn_tsgolint(&self, json_input: &Payload) -> Result<TsGoLintChild, String> {
+        let mut cmd = std::process::Command::new(&self.executable_path);
+        cmd.args(self.tsgolint_args())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(stderr());
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -962,12 +1089,12 @@ impl TryFrom<u8> for MessageType {
 
 /// Iterator that streams messages from tsgolint stdout.
 struct TsGoLintMessageStream {
-    stdout: std::process::ChildStdout,
+    stdout: TsGoLintStdout,
     buffer: Vec<u8>,
 }
 
 impl TsGoLintMessageStream {
-    fn new(stdout: std::process::ChildStdout) -> TsGoLintMessageStream {
+    fn new(stdout: TsGoLintStdout) -> TsGoLintMessageStream {
         TsGoLintMessageStream { stdout, buffer: Vec::with_capacity(8192) }
     }
 }
@@ -1356,7 +1483,15 @@ fn parse_single_message(
 /// # Errors
 /// Returns an error if `OXLINT_TSGOLINT_PATH` is set but does not exist or is not a file.
 /// Returns an error if the tsgolint executable could not be found.
+#[cfg_attr(target_os = "wasi", expect(unreachable_code))]
 pub fn try_find_tsgolint_executable(cwd: &Path) -> Result<PathBuf, String> {
+    // On `wasm32-wasip1` the host runs tsgolint (see `wasi_host`), there is nothing to discover.
+    #[cfg(target_os = "wasi")]
+    {
+        let _ = cwd;
+        return Ok(PathBuf::from("tsgolint"));
+    }
+
     // Check the environment variable first
     if let Ok(path_str) = std::env::var("OXLINT_TSGOLINT_PATH") {
         let path = PathBuf::from(&path_str);
